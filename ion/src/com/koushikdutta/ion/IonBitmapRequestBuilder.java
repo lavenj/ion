@@ -125,7 +125,7 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
         // bitmaps that were transformed are put into the DiskLruCache to prevent
         // subsequent retransformation. See if we can retrieve the bitmap from the disk cache.
         // See BitmapToBitmapInfo for where the cache is populated.
-        DiskLruCache diskLruCache = ion.getResponseCache().getDiskLruCache();
+        DiskLruCache diskLruCache = ion.responseCache.getDiskLruCache();
         if (!builder.noCache && hasTransforms && diskLruCache.containsKey(bitmapKey)) {
             BitmapToBitmapInfo.getBitmapSnapshot(ion, bitmapKey);
             return null;
@@ -225,7 +225,10 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
     private static class BitmapInfoToBitmap extends TransformFuture<Bitmap, BitmapInfo> {
         @Override
         protected void transform(BitmapInfo result) throws Exception {
-            setComplete(result.bitmaps[0]);
+            if (result.exception != null)
+                setComplete(result.exception);
+            else
+                setComplete(result.bitmaps[0]);
         }
     }
 
@@ -240,7 +243,8 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
         BitmapInfo info = execute();
         if (info != null) {
             SimpleFuture<Bitmap> ret = new SimpleFuture<Bitmap>();
-            ret.setComplete(info.bitmaps[0]);
+            Bitmap bitmap = info.bitmaps == null ? null : info.bitmaps[0];
+            ret.setComplete(info.exception, bitmap);
             return ret;
         }
 
