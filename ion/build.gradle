@@ -32,7 +32,7 @@ android {
   }
 
     compileSdkVersion 17
-    buildToolsVersion '17'
+    buildToolsVersion '19'
 
     defaultConfig {
         minSdkVersion 7
