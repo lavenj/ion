@@ -11,13 +11,16 @@ class LruBitmapCache extends LruCache<String, BitmapInfo> {
 	@Override
 	protected void entryRemoved(boolean evicted, String key, BitmapInfo oldValue, BitmapInfo newValue) {
 		super.entryRemoved(evicted, key, oldValue, newValue);
-
+/*
 		if( oldValue.bitmaps != null ) {
 			for(Bitmap b:oldValue.bitmaps) {
 				Log.i("LruCache", "Recycling entry in " + key);
 				b.recycle();
 			}
 		}
+*/
+		//TODO keep an eye on this -jake
+		System.gc();
 	}
 
 	@Override
