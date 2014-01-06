@@ -1,56 +1,48 @@
 package com.koushikdutta.ion.bitmap;
 
-import android.graphics.Bitmap;
-import android.util.Log;
-
-import java.lang.ref.WeakReference;
-
 class LruBitmapCache extends LruCache<String, BitmapInfo> {
-	public LruBitmapCache(int maxSize) {
-		super(maxSize);
-	}
+    private SoftReferenceHashtable<String, BitmapInfo> soft = new SoftReferenceHashtable<String, BitmapInfo>();
 
-	@Override
-	protected int sizeOf(String key, BitmapInfo info) {
-		return info.sizeOf();
-	}
+    public LruBitmapCache(int maxSize) {
+        super(maxSize);
+    }
 
-	@Override
-	protected void entryRemoved(boolean evicted, String key, BitmapInfo oldValue, BitmapInfo newValue) {
-		super.entryRemoved(evicted, key, oldValue, newValue);
-/*
-		if( oldValue.bitmaps != null ) {
-			for(Bitmap b:oldValue.bitmaps) {
-				Log.i("LruCache", "Recycling entry in " + key);
-				b.recycle();
-			}
-		}
-*/
-		//TODO keep an eye on this -jake
-		System.gc();
+    @Override
+    protected int sizeOf(String key, BitmapInfo info) {
+        return info.sizeOf();
+    }
 
-		// this shit is broken
-		if (true)
-			return;
+    public BitmapInfo getBitmapInfo(String key) {
+        BitmapInfo ret = get(key);
+        if (ret != null)
+            return ret;
 
-		// on eviction, put the bitmaps into a weak ref
-		if (!evicted)
-			return;
+        ret = soft.remove(key);
+        if (ret != null)
+            put(key, ret);
 
-		// toss the oldValue into a weak ref, and play with that.
-		if (oldValue == null)
-			return;
-		if (oldValue.bitmaps == null)
-			return;
-		// don't try to weak ref on gifs, because only one bitmap
-		// ref total will be held.
-		if (oldValue.bitmaps.length > 1)
-			return;
+        return ret;
+    }
 
-		oldValue.bitmapRef = new WeakReference<Bitmap>(oldValue.bitmaps[0]);
-		oldValue.bitmaps = null;
-		put(key, oldValue);
-	}
+    public BitmapInfo removeBitmapInfo(String key) {
+        BitmapInfo i1 = soft.remove(key);
+        BitmapInfo i2 = remove(key);
+        if (i2 != null)
+            return i2;
+        return i1;
+    }
 
+    public void evictAllBitmapInfo() {
+        evictAll();
+        soft.clear();
+    }
 
+    @Override
+    protected void entryRemoved(boolean evicted, String key, BitmapInfo oldValue, BitmapInfo newValue) {
+        super.entryRemoved(evicted, key, oldValue, newValue);
+
+        // on eviction, put the bitmaps into the soft ref table
+        if (evicted)
+            soft.put(key, oldValue);
+    }
 }

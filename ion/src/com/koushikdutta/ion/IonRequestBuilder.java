@@ -208,10 +208,14 @@ class IonRequestBuilder implements Builders.Any.B, Builders.Any.F, Builders.Any.
         return false;
     }
 
-    private boolean checkContext() {
-        Context context = IonRequestBuilder.this.context.get();
+    static boolean checkContext(WeakReference<Context> contextWeakReference) {
+        Context context = contextWeakReference.get();
         if (context == null)
             return false;
+        return checkContext(context);
+    }
+
+    static boolean checkContext(Context context) {
         if (context instanceof Activity) {
             Activity activity = (Activity)context;
             if (activity.isFinishing())
@@ -224,6 +228,10 @@ class IonRequestBuilder implements Builders.Any.B, Builders.Any.F, Builders.Any.
         }
 
         return true;
+    }
+
+    private boolean checkContext() {
+        return checkContext(context);
     }
 
     private <T> void postExecute(final EmitterTransform<T> future, final Exception ex, final T value) {
@@ -304,7 +312,7 @@ class IonRequestBuilder implements Builders.Any.B, Builders.Any.F, Builders.Any.
                 public void onProgress(final int downloaded, final int total) {
                     assert Thread.currentThread() != Looper.getMainLooper().getThread();
 
-                    int percent = (int)((float)total / total * 100f);
+                    final int percent = (int)((float)downloaded / total * 100f);
 
                     if (uploadProgressBar != null)
                         uploadProgressBar.setProgress(percent);
@@ -603,13 +611,18 @@ class IonRequestBuilder implements Builders.Any.B, Builders.Any.F, Builders.Any.
     }
 
     @Override
+    public <T> ResponseFuture<T> as(AsyncParser<T> parser) {
+        return execute(parser);
+    }
+
+    @Override
     public <F extends OutputStream> ResponseFuture<F> write(F outputStream, boolean close) {
-        return execute(new OutputStreamDataSink(ion.getServer(), outputStream, false), close, outputStream);
+        return execute(new OutputStreamDataSink(ion.getServer(), outputStream), close, outputStream);
     }
 
     @Override
     public <F extends OutputStream> ResponseFuture<F> write(F outputStream) {
-        return execute(new OutputStreamDataSink(ion.getServer(), outputStream, false), true, outputStream);
+        return execute(new OutputStreamDataSink(ion.getServer(), outputStream), true, outputStream);
     }
 
     @Override

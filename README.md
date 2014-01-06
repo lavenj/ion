@@ -362,14 +362,14 @@ Ion.with(getContext())
 <dependency>
    <groupId>com.koushikdutta.ion</groupId>
    <artifactId>ion</artifactId>
-   <version>1.1.5</version>
+   <version>1.2.0</version>
 </dependency>
 ```
 
 ##### Gradle
 ```groovy
 dependencies {
-   compile 'com.koushikdutta.ion:ion:1.1.5'
+   compile 'com.koushikdutta.ion:ion:1.2.0'
 }
 ````
 
@@ -378,10 +378,16 @@ dependencies {
 git clone git://github.com/koush/AndroidAsync.git
 git clone git://github.com/koush/ion.git
 cd ion/ion
-ant release install
+ant -Dsdk.dir=$ANDROID_HOME release install
 ```
 Jars are at
  * ion/ion/bin/classes.jar
  * AndroidAsync/AndroidAsync/bin/classes.jar
 
-
+#### Hack in Eclipse
+```
+git clone git://github.com/koush/AndroidAsync.git
+git clone git://github.com/koush/ion.git
+```
+* Import the project from AndroidAsync/AndroidAsync into your workspace
+* Import all the ion projects (ion/ion, ion/ion-test, ion/ion-sample) into your workspace.

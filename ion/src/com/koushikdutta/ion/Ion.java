@@ -38,6 +38,7 @@ import com.koushikdutta.ion.loader.ContentLoader;
 import com.koushikdutta.ion.loader.FileLoader;
 import com.koushikdutta.ion.loader.HttpLoader;
 import com.koushikdutta.ion.loader.PackageIconLoader;
+import com.koushikdutta.ion.loader.VideoLoader;
 
 /**
  * Created by koush on 5/21/13.
@@ -45,7 +46,8 @@ import com.koushikdutta.ion.loader.PackageIconLoader;
 public class Ion {
     static final Handler mainHandler = new Handler(Looper.getMainLooper());
     static int availableProcessors = Runtime.getRuntime().availableProcessors();
-    static ExecutorService singleExecutorService  = availableProcessors > 2 ? null : Executors.newFixedThreadPool(1);
+    static ExecutorService ioExecutorService = Executors.newFixedThreadPool(4);
+    static ExecutorService bitmapExecutorService  = availableProcessors > 2 ? Executors.newFixedThreadPool(availableProcessors - 1) : Executors.newFixedThreadPool(1);
     static HashMap<String, Ion> instances = new HashMap<String, Ion>();
 
     /**
@@ -116,6 +118,8 @@ public class Ion {
     DiskLruCache storeCache;
     HttpLoader httpLoader;
     ContentLoader contentLoader;
+    VideoLoader videoLoader;
+    PackageIconLoader packageIconLoader;
     FileLoader fileLoader;
     String logtag;
     int logLevel;
@@ -156,19 +160,19 @@ public class Ion {
         bitmapCache = new IonBitmapCache(this);
 
         configure()
-                .addLoader(new PackageIconLoader())
+                .addLoader(videoLoader = new VideoLoader())
+                .addLoader(packageIconLoader = new PackageIconLoader())
                 .addLoader(httpLoader = new HttpLoader())
                 .addLoader(contentLoader = new ContentLoader())
                 .addLoader(fileLoader = new FileLoader());
     }
 
-    // todo: make this static by moving the server's executor service to static
-    public ExecutorService getBitmapLoadExecutorService() {
-        ExecutorService executorService = singleExecutorService;
-        if (executorService == null) {
-            executorService = getServer().getExecutorService();
-        }
-        return executorService;
+    public static ExecutorService getBitmapLoadExecutorService() {
+        return bitmapExecutorService;
+    }
+
+    public static ExecutorService getIoExecutorService() {
+        return ioExecutorService;
     }
 
     /**
@@ -312,7 +316,6 @@ public class Ion {
 
     /**
      * Get or put an item from the cache
-     * @param key
      * @return
      */
     public DiskLruCacheStore cache() {
@@ -321,7 +324,6 @@ public class Ion {
 
     /**
      * Get or put an item in the persistent store
-     * @param key
      * @return
      */
     public DiskLruCacheStore store() {
@@ -359,6 +361,14 @@ public class Ion {
     public class Config {
         public HttpLoader getHttpLoader() {
             return httpLoader;
+        }
+
+        public VideoLoader getVideoLoader() {
+            return videoLoader;
+        }
+
+        public PackageIconLoader getPackageIconLoader() {
+            return packageIconLoader;
         }
 
         public ContentLoader getContentLoader() {
