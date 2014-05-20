@@ -31,7 +31,7 @@ public class HttpLoader extends SimpleLoader {
                 if (response != null) {
                     request = response.getRequest();
                     headers = response.getHeaders().getHeaders();
-                    length = response.getHeaders().getContentLength();
+                    length = (int)(response.getHeaders().getContentLength());
                     String servedFrom = response.getHeaders().getHeaders().get(ResponseCacheMiddleware.SERVED_FROM);
                     if (TextUtils.equals(servedFrom, ResponseCacheMiddleware.CACHE))
                         loadedFrom = LoaderEmitter.LOADED_FROM_CACHE;
