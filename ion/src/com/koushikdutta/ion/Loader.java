@@ -1,5 +1,7 @@
 package com.koushikdutta.ion;
 
+import android.content.Context;
+
 import com.koushikdutta.async.DataEmitter;
 import com.koushikdutta.async.future.Future;
 import com.koushikdutta.async.future.FutureCallback;
@@ -48,14 +50,43 @@ public interface Loader {
         }
     }
 
-    // returns a Future if this loader can handle a request as a stream.
-    // this implies that the stream is essentially non blocking...
-    // ie file or memory based.
+    /**
+     * returns a Future if this loader can handle a request as a stream.
+     * this implies that the stream is essentially non blocking...
+     * ie file or memory based.
+     * @param ion
+     * @param request
+     * @return
+     */
     public Future<InputStream> load(Ion ion, AsyncHttpRequest request);
 
-    // returns a Future if this loader can handle a request
-    // otherwise it returns null, and Ion continues to the next loader.
+    /**
+     * returns a Future if this loader can handle a request
+     * otherwise it returns null, and Ion continues to the next loader.
+     * @param ion
+     * @param request
+     * @param callback
+     * @return
+     */
     public Future<DataEmitter> load(Ion ion, AsyncHttpRequest request, FutureCallback<LoaderEmitter> callback);
 
-    public Future<BitmapInfo> loadBitmap(Ion ion, String uri, int resizeWidth, int resizeHeight);
+    /**
+     * returns a future if the laoder can handle the request as a bitmap
+     * otherwise it returns null
+     * @param ion
+     * @param key
+     * @param uri
+     * @param resizeWidth
+     * @param resizeHeight
+     * @return
+     */
+    public Future<BitmapInfo> loadBitmap(Context context, Ion ion, String key, String uri, int resizeWidth, int resizeHeight, boolean animateGif);
+
+    /**
+     * Resolve a request into another request.
+     * @param ion
+     * @param request
+     * @return
+     */
+    public Future<AsyncHttpRequest> resolve(Context context, Ion ion, AsyncHttpRequest request);
 }

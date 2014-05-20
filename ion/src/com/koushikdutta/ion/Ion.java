@@ -1,14 +1,7 @@
 package com.koushikdutta.ion;
 
-import java.io.File;
-import java.net.URI;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.WeakHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
+import android.annotation.TargetApi;
+import android.app.Fragment;
 import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
@@ -24,8 +17,9 @@ import com.koushikdutta.async.future.FutureCallback;
 import com.koushikdutta.async.http.AsyncHttpClient;
 import com.koushikdutta.async.http.AsyncHttpRequest;
 import com.koushikdutta.async.http.ResponseCacheMiddleware;
-import com.koushikdutta.async.http.libcore.DiskLruCache;
 import com.koushikdutta.async.http.libcore.RawHeaders;
+import com.koushikdutta.async.util.FileCache;
+import com.koushikdutta.async.util.FileUtility;
 import com.koushikdutta.async.util.HashList;
 import com.koushikdutta.ion.bitmap.BitmapInfo;
 import com.koushikdutta.ion.bitmap.IonBitmapCache;
@@ -40,6 +34,16 @@ import com.koushikdutta.ion.loader.HttpLoader;
 import com.koushikdutta.ion.loader.PackageIconLoader;
 import com.koushikdutta.ion.loader.VideoLoader;
 
+import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.WeakHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 /**
  * Created by koush on 5/21/13.
  */
@@ -52,22 +56,42 @@ public class Ion {
 
     /**
      * Get the default Ion object instance and begin building a request
-     * with the given uri
-     * @param context
-     * @param uri
-     * @return
-     */
-    public static Builders.Any.B with(Context context, String uri) {
-        return getDefault(context).build(context, uri);
-    }
-
-    /**
-     * Get the default Ion object instance and begin building a request
      * @param context
      * @return
      */
     public static LoadBuilder<Builders.Any.B> with(Context context) {
         return getDefault(context).build(context);
+    }
+
+    /**
+     * the default Ion object instance and begin building a request
+     * @param fragment
+     * @return
+     */
+    @TargetApi(Build.VERSION_CODES.HONEYCOMB_MR2)
+    public static LoadBuilder<Builders.Any.B> with(Fragment fragment) {
+        return getDefault(fragment.getActivity()).build(fragment);
+    }
+
+    /**
+     * the default Ion object instance and begin building a request
+     * @param fragment
+     * @return
+     */
+    public static LoadBuilder<Builders.Any.B> with(android.support.v4.app.Fragment fragment) {
+        return getDefault(fragment.getActivity()).build(fragment);
+    }
+
+    /**
+     * Get the default Ion object instance and begin building a request
+     * with the given uri
+     * @param context
+     * @param uri
+     * @return
+     */
+    @Deprecated
+    public static Builders.Any.B with(Context context, String uri) {
+        return getDefault(context).build(context, uri);
     }
 
     /**
@@ -77,9 +101,11 @@ public class Ion {
      * @param file
      * @return
      */
+    @Deprecated
     public static FutureBuilder with(Context context, File file) {
         return getDefault(context).build(context, file);
     }
+
     /**
      * Get the default Ion instance
      * @param context
@@ -96,6 +122,8 @@ public class Ion {
      * @return
      */
     public static Ion getInstance(Context context, String name) {
+        if (context == null)
+            throw new NullPointerException("Can not pass null context in to retrieve ion instance");
         Ion instance = instances.get(name);
         if (instance == null)
             instances.put(name, instance = new Ion(context, name));
@@ -107,15 +135,14 @@ public class Ion {
      * @param imageView
      * @return
      */
-    public static Builders.ImageView.F<? extends Builders.ImageView.F<?>> with(ImageView imageView) {
-        Ion ion = getDefault(imageView.getContext());
-        return ion.build(imageView);
+    public static Builders.IV.F<? extends Builders.IV.F<?>> with(ImageView imageView) {
+        return getDefault(imageView.getContext()).build(imageView);
     }
 
     AsyncHttpClient httpClient;
     CookieMiddleware cookieMiddleware;
     ResponseCacheMiddleware responseCache;
-    DiskLruCache storeCache;
+    FileCache storeCache;
     HttpLoader httpLoader;
     ContentLoader contentLoader;
     VideoLoader videoLoader;
@@ -134,21 +161,26 @@ public class Ion {
     IonBitmapRequestBuilder bitmapBuilder = new IonBitmapRequestBuilder(this);
 
     private Ion(Context context, String name) {
-        httpClient = new AsyncHttpClient(new AsyncServer());
+        httpClient = new AsyncHttpClient(new AsyncServer("ion-" + name));
         this.context = context = context.getApplicationContext();
         this.name = name;
 
+        File ionCacheDir = new File(context.getCacheDir(), name);
         try {
-            responseCache = ResponseCacheMiddleware.addCache(httpClient, new File(context.getCacheDir(), name), 10L * 1024L * 1024L);
+            responseCache = ResponseCacheMiddleware.addCache(httpClient, ionCacheDir, 10L * 1024L * 1024L);
         }
-        catch (Exception e) {
-            IonLog.w("unable to set up response cache", e);
+        catch (IOException e) {
+            IonLog.w("unable to set up response cache, clearing", e);
+            FileUtility.deleteDirectory(ionCacheDir);
+            try {
+                responseCache = ResponseCacheMiddleware.addCache(httpClient, ionCacheDir, 10L * 1024L * 1024L);
+            }
+            catch (IOException ex) {
+                IonLog.w("unable to set up response cache, failing", e);
+            }
         }
-        try {
-            storeCache = DiskLruCache.open(new File(context.getFilesDir(), name), 1, 1, Long.MAX_VALUE);
-        }
-        catch (Exception e) {
-        }
+
+        storeCache = new FileCache(new File(context.getFilesDir(), name), Long.MAX_VALUE, false);
 
         // TODO: Support pre GB?
         if (Build.VERSION.SDK_INT >= 9)
@@ -181,8 +213,9 @@ public class Ion {
      * @param file
      * @return
      */
+    @Deprecated
     public FutureBuilder build(Context context, File file) {
-        return new IonRequestBuilder(context, this).load(file);
+        return new IonRequestBuilder(ContextReference.fromContext(context), this).load(file);
     }
 
     /**
@@ -191,8 +224,9 @@ public class Ion {
      * @param uri
      * @return
      */
+    @Deprecated
     public Builders.Any.B build(Context context, String uri) {
-        return new IonRequestBuilder(context, this).load(uri);
+        return new IonRequestBuilder(ContextReference.fromContext(context), this).load(uri);
     }
 
     /**
@@ -201,7 +235,25 @@ public class Ion {
      * @return
      */
     public LoadBuilder<Builders.Any.B> build(Context context) {
-        return new IonRequestBuilder(context, this);
+        return new IonRequestBuilder(ContextReference.fromContext(context), this);
+    }
+
+    /**
+     * Begin building a request
+     * @param fragment
+     * @return
+     */
+    public LoadBuilder<Builders.Any.B> build(Fragment fragment) {
+        return new IonRequestBuilder(new ContextReference.FragmentContextReference(fragment), this);
+    }
+
+    /**
+     * Begin building a request
+     * @param fragment
+     * @return
+     */
+    public LoadBuilder<Builders.Any.B> build(android.support.v4.app.Fragment fragment) {
+        return new IonRequestBuilder(new ContextReference.SupportFragmentContextReference(fragment), this);
     }
 
     /**
@@ -209,12 +261,60 @@ public class Ion {
      * @param imageView
      * @return
      */
-    public Builders.ImageView.F<? extends Builders.ImageView.F<?>> build(ImageView imageView) {
+    public Builders.IV.F<? extends Builders.IV.F<?>> build(ImageView imageView) {
         if (Thread.currentThread() != Looper.getMainLooper().getThread())
             throw new IllegalStateException("must be called from UI thread");
         bitmapBuilder.reset();
         bitmapBuilder.ion = this;
         return bitmapBuilder.withImageView(imageView);
+    }
+
+    int groupCount(Object group) {
+        FutureSet members;
+        synchronized (this) {
+            members = inFlight.get(group);
+        }
+
+        if (members == null)
+            return 0;
+
+        return members.size();
+    }
+
+    private Runnable processDeferred = new Runnable() {
+        @Override
+        public void run() {
+            if (BitmapFetcher.shouldDeferImageView(Ion.this))
+                return;
+            ArrayList<DeferredLoadBitmap> deferred = null;
+            for (String key: bitmapsPending.keySet()) {
+                Object owner = bitmapsPending.tag(key);
+                if (owner instanceof DeferredLoadBitmap) {
+                    DeferredLoadBitmap deferredLoadBitmap = (DeferredLoadBitmap)owner;
+                    if (deferred == null)
+                        deferred = new ArrayList<DeferredLoadBitmap>();
+                    deferred.add(deferredLoadBitmap);
+                }
+            }
+
+            if (deferred == null)
+                return;
+            int count = 0;
+            for (DeferredLoadBitmap deferredLoadBitmap: deferred) {
+                bitmapsPending.tag(deferredLoadBitmap.key, null);
+                bitmapsPending.tag(deferredLoadBitmap.fetcher.bitmapKey, null);
+                deferredLoadBitmap.fetcher.execute();
+                count++;
+                // do MAX_IMAGEVIEW_LOAD max. this may end up going over the MAX_IMAGEVIEW_LOAD threshhold
+                if (count > BitmapFetcher.MAX_IMAGEVIEW_LOAD)
+                    return;
+            }
+        }
+    };
+
+    void processDeferred() {
+        mainHandler.removeCallbacks(processDeferred);
+        mainHandler.post(processDeferred);
     }
 
     /**
@@ -318,16 +418,24 @@ public class Ion {
      * Get or put an item from the cache
      * @return
      */
-    public DiskLruCacheStore cache() {
-        return new DiskLruCacheStore(this, responseCache.getDiskLruCache());
+    public FileCacheStore cache(String key) {
+        return new FileCacheStore(this, responseCache.getFileCache(), key);
+    }
+
+    public FileCache getCache() {
+        return responseCache.getFileCache();
     }
 
     /**
      * Get or put an item in the persistent store
      * @return
      */
-    public DiskLruCacheStore store() {
-        return new DiskLruCacheStore(this, responseCache.getDiskLruCache());
+    public FileCacheStore store(String key) {
+        return new FileCacheStore(this, storeCache, key);
+    }
+
+    public FileCache getStore() {
+        return storeCache;
     }
 
     public String getName() {

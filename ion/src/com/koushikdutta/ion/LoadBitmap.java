@@ -1,7 +1,10 @@
 package com.koushikdutta.ion;
 
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Point;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.util.Log;
 
 import com.koushikdutta.async.ByteBufferList;
@@ -15,31 +18,16 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-class LoadBitmap extends BitmapCallback implements FutureCallback<ByteBufferList> {
+class LoadBitmap extends LoadBitmapEmitter implements FutureCallback<ByteBufferList> {
     int resizeWidth;
     int resizeHeight;
-    IonRequestBuilder.EmitterTransform<ByteBufferList> emitterTransform;
-    boolean animateGif;
 
     public LoadBitmap(Ion ion, String urlKey, boolean put, int resizeWidth, int resizeHeight, boolean animateGif, IonRequestBuilder.EmitterTransform<ByteBufferList> emitterTransform) {
-        super(ion, urlKey, put);
+        super(ion, urlKey, put, animateGif, emitterTransform);
         this.resizeWidth = resizeWidth;
         this.resizeHeight = resizeHeight;
         this.animateGif = animateGif;
         this.emitterTransform = emitterTransform;
-    }
-
-    private boolean isGif() {
-        if (emitterTransform == null)
-            return false;
-        if (emitterTransform.finalRequest != null) {
-            URI uri = emitterTransform.finalRequest.getUri();
-            if (uri != null && uri.toString().endsWith(".gif"))
-                return true;
-        }
-        if (emitterTransform.headers == null)
-            return false;
-        return "image/gif".equals(emitterTransform.headers.get("Content-Type"));
     }
 
     @Override
@@ -50,7 +38,6 @@ class LoadBitmap extends BitmapCallback implements FutureCallback<ByteBufferList
         }
 
         if (ion.bitmapsPending.tag(key) != this) {
-//            Log.d("IonBitmapLoader", "Bitmap load cancelled (no longer needed)");
             result.recycle();
             return;
         }
@@ -58,18 +45,20 @@ class LoadBitmap extends BitmapCallback implements FutureCallback<ByteBufferList
         Ion.getBitmapLoadExecutorService().execute(new Runnable() {
             @Override
             public void run() {
+                if (ion.bitmapsPending.tag(key) != LoadBitmap.this) {
+                    result.recycle();
+                    return;
+                }
+
                 ByteBuffer bb = result.getAll();
                 try {
                     Bitmap[] bitmaps;
                     int[] delays;
-                    if (!isGif()) {
-                        Bitmap bitmap = ion.bitmapCache.loadBitmap(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining(), resizeWidth, resizeHeight);
-                        if (bitmap == null)
-                            throw new Exception("failed to transform bitmap");
-                        bitmaps = new Bitmap[] { bitmap };
-                        delays = null;
-                    }
-                    else {
+                    BitmapFactory.Options options = ion.bitmapCache.prepareBitmapOptions(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining(), resizeWidth, resizeHeight);
+                    if (options == null)
+                        throw new Exception("BitmapFactory.Options failed to load");
+                    final Point size = new Point(options.outWidth, options.outHeight);
+                    if (animateGif && TextUtils.equals("image/gif", options.outMimeType)) {
                         GifDecoder decoder = new GifDecoder(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining(), new GifAction() {
                             @Override
                             public boolean parseOk(boolean parseStatus, int frameIndex) {
@@ -77,19 +66,26 @@ class LoadBitmap extends BitmapCallback implements FutureCallback<ByteBufferList
                             }
                         });
                         decoder.run();
+                        if (decoder.getFrameCount() == 0)
+                            throw new Exception("failed to load gif");
                         bitmaps = new Bitmap[decoder.getFrameCount()];
                         delays = decoder.getDelays();
                         for (int i = 0; i < decoder.getFrameCount(); i++) {
                             Bitmap bitmap = decoder.getFrameImage(i);
                             if (bitmap == null)
-                                throw new Exception("failed to transform bitmap");
+                                throw new Exception("failed to load gif frame");
                             bitmaps[i] = bitmap;
                         }
                     }
+                    else {
+                        Bitmap bitmap = ion.bitmapCache.loadBitmap(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining(), options);
+                        if (bitmap == null)
+                            throw new Exception("failed to load bitmap");
+                        bitmaps = new Bitmap[] { bitmap };
+                        delays = null;
+                    }
 
-                    BitmapInfo info = new BitmapInfo();
-                    info.key = key;
-                    info.bitmaps = bitmaps;
+                    BitmapInfo info = new BitmapInfo(key, options.outMimeType, bitmaps, size);
                     info.delays = delays;
                     if (emitterTransform != null)
                         info.loadedFrom = emitterTransform.loadedFrom();

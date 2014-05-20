@@ -1,37 +1,29 @@
 package com.koushikdutta.ion;
 
-import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Looper;
-import android.util.Pair;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 import android.widget.ImageView;
 
-import com.koushikdutta.async.AsyncServer;
-import com.koushikdutta.async.ByteBufferList;
 import com.koushikdutta.async.future.Future;
-import com.koushikdutta.async.future.FutureCallback;
 import com.koushikdutta.async.future.SimpleFuture;
-import com.koushikdutta.async.future.TransformFuture;
-import com.koushikdutta.async.http.ResponseCacheMiddleware;
-import com.koushikdutta.async.http.libcore.DiskLruCache;
-import com.koushikdutta.async.parser.ByteBufferListParser;
+import com.koushikdutta.async.util.FileCache;
 import com.koushikdutta.ion.bitmap.BitmapInfo;
 import com.koushikdutta.ion.bitmap.Transform;
 import com.koushikdutta.ion.builder.BitmapFutureBuilder;
 import com.koushikdutta.ion.builder.Builders;
-import com.koushikdutta.ion.builder.ImageViewBuilder;
 import com.koushikdutta.ion.builder.ImageViewFutureBuilder;
 
-import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 
 /**
  * Created by koush on 5/23/13.
  */
-class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBuilder, BitmapFutureBuilder, Builders.Any.BF {
+class IonBitmapRequestBuilder implements Builders.IV.F, ImageViewFutureBuilder, BitmapFutureBuilder, Builders.Any.BF {
     private static final SimpleFuture<ImageView> FUTURE_IMAGEVIEW_NULL_URI = new SimpleFuture<ImageView>() {
         {
             setComplete(new NullPointerException("uri"));
@@ -45,7 +37,7 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
 
     IonRequestBuilder builder;
     Ion ion;
-    WeakReference<ImageView> imageViewPostRef;
+    ContextReference.ImageViewContextReference imageViewPostRef;
     ArrayList<Transform> transforms;
     Drawable placeholderDrawable;
     int placeholderResource;
@@ -60,7 +52,7 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
     int resizeHeight;
     boolean disableFadeIn;
     boolean animateGif = true;
-
+    boolean deepZoom;
 
     void reset() {
         placeholderDrawable = null;
@@ -80,6 +72,7 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
         disableFadeIn = false;
         animateGif = true;
         builder = null;
+        deepZoom = false;
     }
 
     public IonBitmapRequestBuilder(IonRequestBuilder builder) {
@@ -106,7 +99,7 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
 
     private IonRequestBuilder ensureBuilder() {
         if (builder == null)
-            builder = new IonRequestBuilder(imageViewPostRef.get().getContext(), ion);
+            builder = new IonRequestBuilder(ContextReference.fromContext(imageViewPostRef.getContext().getApplicationContext()), ion);
         return builder;
     }
 
@@ -125,35 +118,18 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
     }
 
     IonBitmapRequestBuilder withImageView(ImageView imageView) {
-        imageViewPostRef = new WeakReference<ImageView>(imageView);
+        imageViewPostRef = new ContextReference.ImageViewContextReference(imageView);
         return this;
     }
 
     @Override
     public IonBitmapRequestBuilder transform(Transform transform) {
+        if (transform == null)
+            return this;
         if (transforms == null)
             transforms = new ArrayList<Transform>();
         transforms.add(transform);
         return this;
-    }
-
-    boolean fastLoad(final String downloadKey, boolean put) {
-        for (Loader loader: ion.configure().getLoaders()) {
-            Future<BitmapInfo> future = loader.loadBitmap(ion, builder.uri, resizeWidth, resizeHeight);
-            if (future != null) {
-                final BitmapCallback callback = new BitmapCallback(ion, downloadKey, put);
-                future.setCallback(new FutureCallback<BitmapInfo>() {
-                    @Override
-                    public void onCompleted(Exception e, BitmapInfo result) {
-                        if (result != null)
-                            result.key = downloadKey;
-                        callback.report(e, result);
-                    }
-                });
-                return true;
-            }
-        }
-        return false;
     }
 
     private String computeDownloadKey() {
@@ -161,16 +137,21 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
         // although a gif is always same download, the initial decode is different
         if (!animateGif)
             downloadKey += ":!animateGif";
-        return ResponseCacheMiddleware.toKeyString(downloadKey);
+        if (deepZoom)
+            downloadKey += ":deepZoom";
+        return FileCache.toKeyString(downloadKey);
     }
 
-    Pair<String, BitmapInfo> execute() {
+    @Override
+    public BitmapInfo asCachedBitmap() {
         final String downloadKey = computeDownloadKey();
         assert Thread.currentThread() == Looper.getMainLooper().getThread() || imageViewPostRef == null;
         assert downloadKey != null;
 
         if (resizeHeight > 0 || resizeWidth > 0) {
-            transform(new DefaultTransform(resizeWidth, resizeHeight, scaleMode));
+            if (transforms == null)
+                transforms = new ArrayList<Transform>();
+            transforms.add(0, new DefaultTransform(resizeWidth, resizeHeight, scaleMode));
         }
 
         // determine the key for this bitmap after all transformations
@@ -180,67 +161,66 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
             for (Transform transform : transforms) {
                 bitmapKey += transform.key();
             }
-            bitmapKey = ResponseCacheMiddleware.toKeyString(bitmapKey);
+            bitmapKey = FileCache.toKeyString(bitmapKey);
         }
+
+        return builder.ion.bitmapCache.get(bitmapKey);
+    }
+
+    BitmapFetcher executeCache() {
+        final String downloadKey = computeDownloadKey();
+        assert Thread.currentThread() == Looper.getMainLooper().getThread() || imageViewPostRef == null;
+        assert downloadKey != null;
+
+        if (resizeHeight > 0 || resizeWidth > 0) {
+            if (transforms == null)
+                transforms = new ArrayList<Transform>();
+            transforms.add(0, new DefaultTransform(resizeWidth, resizeHeight, scaleMode));
+        }
+
+        // determine the key for this bitmap after all transformations
+        String bitmapKey = downloadKey;
+        boolean hasTransforms = transforms != null && transforms.size() > 0;
+        if (hasTransforms) {
+            for (Transform transform : transforms) {
+                bitmapKey += transform.key();
+            }
+            bitmapKey = FileCache.toKeyString(bitmapKey);
+        }
+
+        // TODO: eliminate this allocation?
+        BitmapFetcher ret = new BitmapFetcher();
+        ret.downloadKey = downloadKey;
+        ret.bitmapKey = bitmapKey;
+        ret.hasTransforms = hasTransforms;
+        ret.resizeWidth = resizeWidth;
+        ret.resizeHeight = resizeHeight;
+        ret.builder = builder;
+        ret.transforms = transforms;
+        ret.animateGif = animateGif;
+        ret.deepZoom = deepZoom;
 
         // see if this request can be fulfilled from the cache
         if (!builder.noCache) {
             BitmapInfo bitmap = builder.ion.bitmapCache.get(bitmapKey);
-            if (bitmap != null)
-                return new Pair<String, BitmapInfo>(bitmapKey, bitmap);
-        }
-
-        Pair<String, BitmapInfo> ret = new Pair<String, BitmapInfo>(bitmapKey, null);
-
-        // bitmaps that were transformed are put into the DiskLruCache to prevent
-        // subsequent retransformation. See if we can retrieve the bitmap from the disk cache.
-        // See BitmapToBitmapInfo for where the cache is populated.
-        DiskLruCache diskLruCache = ion.responseCache.getDiskLruCache();
-        if (!builder.noCache && hasTransforms && diskLruCache.containsKey(bitmapKey)) {
-            BitmapToBitmapInfo.getBitmapSnapshot(ion, bitmapKey);
-            return ret;
-        }
-
-        // Perform a download as necessary.
-        if (!ion.bitmapsPending.contains(downloadKey) && !fastLoad(downloadKey, !hasTransforms)) {
-            builder.setHandler(null);
-            // if we cancel, gotta remove any waiters.
-            IonRequestBuilder.EmitterTransform<ByteBufferList> emitterTransform = builder.execute(new ByteBufferListParser(), new Runnable() {
-                @Override
-                public void run() {
-                    AsyncServer.post(Ion.mainHandler, new Runnable() {
-                        @Override
-                        public void run() {
-                            ion.bitmapsPending.remove(downloadKey);
-                        }
-                    });
-                }
-            });
-            emitterTransform.setCallback(new LoadBitmap(ion, downloadKey, !hasTransforms, resizeWidth, resizeHeight, animateGif, emitterTransform));
-        }
-
-        // if there's a transform, do it
-        if (!hasTransforms)
-            return ret;
-
-        // verify this transform isn't already pending
-        // make sure that the parent download isn't cancelled (empty list)
-        // and also make sure there are waiters for this transformed bitmap
-        if (!ion.bitmapsPending.contains(downloadKey) || !ion.bitmapsPending.contains(bitmapKey)) {
-            ion.bitmapsPending.add(downloadKey, new BitmapToBitmapInfo(ion, bitmapKey, downloadKey, transforms));
+            if (bitmap != null) {
+                ret.info = bitmap;
+                return ret;
+            }
         }
 
         return ret;
     }
 
     private IonDrawable setIonDrawable(ImageView imageView, BitmapInfo info, int loadedFrom) {
-        IonDrawable ret = IonDrawable.getOrCreateIonDrawable(imageView);
-        ret.setBitmap(info, loadedFrom);
-        ret.setSize(resizeWidth, resizeHeight);
-        ret.setError(errorResource, errorDrawable);
-        ret.setPlaceholder(placeholderResource, placeholderDrawable);
-        ret.setInAnimation(inAnimation, inAnimationResource);
-        ret.setDisableFadeIn(disableFadeIn);
+        IonDrawable ret = IonDrawable.getOrCreateIonDrawable(imageView)
+        .ion(ion)
+        .setBitmap(info, loadedFrom)
+        .setSize(resizeWidth, resizeHeight)
+        .setError(errorResource, errorDrawable)
+        .setPlaceholder(placeholderResource, placeholderDrawable)
+        .setInAnimation(inAnimation, inAnimationResource)
+        .setDisableFadeIn(disableFadeIn);
         imageView.setImageDrawable(ret);
         return ret;
     }
@@ -251,53 +231,69 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
             throw new IllegalArgumentException("imageView");
         assert Thread.currentThread() == Looper.getMainLooper().getThread();
 
+        if (builder.uri != null && builder.uri.startsWith("android.resource:/")) {
+            IonDrawable drawable = setIonDrawable(imageView, null, 0);
+            SimpleFuture<ImageView> imageViewFuture = drawable.getFuture();
+            imageViewFuture.reset();
+            imageView.setImageURI(Uri.parse(builder.uri));
+            imageViewFuture.setComplete(null, imageView);
+            return imageViewFuture;
+        }
+
         // no uri? just set a placeholder and bail
         if (builder.uri == null) {
             setIonDrawable(imageView, null, 0).cancel();
             return FUTURE_IMAGEVIEW_NULL_URI;
         }
 
-        // execute the request, see if we get a bitmap from cache.
-        Pair<String, BitmapInfo> pair = execute();
-        if (pair.second != null) {
+        // executeCache the request, see if we get a bitmap from cache.
+        BitmapFetcher bitmapFetcher = executeCache();
+        if (bitmapFetcher.info != null) {
             doAnimation(imageView, null, 0);
-            IonDrawable drawable = setIonDrawable(imageView, pair.second, Loader.LoaderEmitter.LOADED_FROM_MEMORY);
+            IonDrawable drawable = setIonDrawable(imageView, bitmapFetcher.info, Loader.LoaderEmitter.LOADED_FROM_MEMORY);
             drawable.cancel();
             SimpleFuture<ImageView> imageViewFuture = drawable.getFuture();
             imageViewFuture.reset();
-            imageViewFuture.setComplete(imageView);
+            imageViewFuture.setComplete(bitmapFetcher.info.exception, imageView);
             return imageViewFuture;
+        }
+
+        // nothing from cache, check to see if there's too many imageview loads
+        // already in progress
+        if (BitmapFetcher.shouldDeferImageView(ion)) {
+            bitmapFetcher.defer();
+        }
+        else {
+            bitmapFetcher.execute();
         }
 
         IonDrawable drawable = setIonDrawable(imageView, null, 0);
         doAnimation(imageView, loadAnimation, loadAnimationResource);
         SimpleFuture<ImageView> imageViewFuture = drawable.getFuture();
         imageViewFuture.reset();
-
-        drawable.register(ion, pair.first);
-
+        drawable.register(ion, bitmapFetcher.bitmapKey);
         return imageViewFuture;
     }
 
     @Override
     public Future<Bitmap> asBitmap() {
-        // no uri? just set a placeholder and bail
         if (builder.uri == null) {
             return FUTURE_BITMAP_NULL_URI;
         }
 
         // see if we get something back synchronously
-        Pair<String, BitmapInfo> pair = execute();
-        if (pair.second != null) {
+        BitmapFetcher bitmapFetcher = executeCache();
+        if (bitmapFetcher.info != null) {
             SimpleFuture<Bitmap> ret = new SimpleFuture<Bitmap>();
-            Bitmap bitmap = pair.second.bitmaps == null ? null : pair.second.bitmaps[0];
-            ret.setComplete(pair.second.exception, bitmap);
+            Bitmap bitmap = bitmapFetcher.info.bitmaps == null ? null : bitmapFetcher.info.bitmaps[0];
+            ret.setComplete(bitmapFetcher.info.exception, bitmap);
             return ret;
         }
 
+        bitmapFetcher.execute();
         // we're loading, so let's register for the result.
-        BitmapInfoToBitmap ret = new BitmapInfoToBitmap(builder.context);
-        ion.bitmapsPending.add(pair.first, ret);
+        BitmapInfoToBitmap ret = new BitmapInfoToBitmap(builder.contextReference);
+        ion.bitmapsPending.add(bitmapFetcher.bitmapKey, ret);
         return ret;
     }
 
@@ -351,6 +347,9 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
 
     @Override
     public IonBitmapRequestBuilder centerCrop() {
+        if (transforms != null && transforms.size() > 0)
+            throw new IllegalStateException("Can't apply centerCrop after transform has been called." +
+            "centerCrop is applied to the original resized bitmap.");
         if (resizeWidth <= 0 || resizeHeight <= 0)
             throw new IllegalStateException("must call resize first");
         scaleMode = ScaleMode.CenterCrop;
@@ -359,6 +358,9 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
 
     @Override
     public IonBitmapRequestBuilder centerInside() {
+        if (transforms != null && transforms.size() > 0)
+            throw new IllegalStateException("Can't apply centerInside after transform has been called." +
+            "centerInside is applied to the original resized bitmap.");
         if (resizeWidth <= 0 || resizeHeight <= 0)
             throw new IllegalStateException("must call resize first");
         scaleMode = ScaleMode.CenterInside;
@@ -367,10 +369,14 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
 
     @Override
     public IonBitmapRequestBuilder resize(int width, int height) {
+        // TODO: prevent multiple calls to resize and friends?
+        if (transforms != null && transforms.size() > 0)
+            throw new IllegalStateException("Can't apply resize after transform has been called." +
+                "resize is applied to the original bitmap.");
+        if (deepZoom)
+            throw new IllegalStateException("Can not resize with deepZoom.");
         resizeWidth = width;
         resizeHeight = height;
-        ensureBuilder().setHeader("X-Ion-Width", String.valueOf(width));
-        ensureBuilder().setHeader("X-Ion-Height", String.valueOf(height));
         return this;
     }
 
@@ -383,7 +389,10 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
 	public IonBitmapRequestBuilder smartSize(boolean smartSize) {
         //don't want to disable device resize if user has already resized the Bitmap.
         if (resizeWidth > 0 || resizeHeight > 0)
-            throw new IllegalStateException("Can't change smart size after resize has been called.");
+            throw new IllegalStateException("Can't set smart size after resize has been called.");
+
+        if (deepZoom)
+            throw new IllegalStateException("Can not smartSize with deepZoom.");
 
         if (!smartSize) {
 			resizeWidth = -1;
@@ -402,23 +411,17 @@ class IonBitmapRequestBuilder implements Builders.ImageView.F, ImageViewFutureBu
         return this;
     }
 
-    private static class BitmapInfoToBitmap extends TransformFuture<Bitmap, BitmapInfo> {
-        WeakReference<Context> context;
-        public BitmapInfoToBitmap(WeakReference<Context> context) {
-            this.context = context;
-        }
-
-        @Override
-        protected void transform(BitmapInfo result) throws Exception {
-            if (!IonRequestBuilder.checkContext(context)) {
-                cancel();
-                return;
-            }
-
-            if (result.exception != null)
-                setComplete(result.exception);
-            else
-                setComplete(result.bitmaps[0]);
-        }
+    @Override
+    public IonBitmapRequestBuilder deepZoom() {
+        if (Build.VERSION.SDK_INT < 10)
+            return this;
+        this.deepZoom = true;
+        if (resizeWidth > 0 || resizeHeight > 0)
+            throw new IllegalStateException("Can't deepZoom with resize.");
+        if (transforms != null && transforms.size() > 0)
+            throw new IllegalStateException("Can't deepZoom with transforms.");
+        resizeWidth = 0;
+        resizeHeight = 0;
+        return this;
     }
 }
